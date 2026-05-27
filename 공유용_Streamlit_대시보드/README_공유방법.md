@@ -1,11 +1,13 @@
-# AI 댐 관리 대시보드 공유용 실행 방법
+# AI 댐 관리 대시보드 공유 방법
 
 ## 1. 이 폴더의 목적
 
-이 폴더는 실시간 MySQL DB와 API 인증키 없이 실행할 수 있는 공유용 Streamlit 대시보드입니다.  
-현재까지 로컬 DB에 쌓인 데이터를 CSV 스냅샷으로 변환하여 `data` 폴더에 넣었습니다.
+`공유용_Streamlit_대시보드`는 팀원이나 발표 환경에서 바로 실행할 수 있도록 만든 공유용 Streamlit 버전입니다.
 
-따라서 팀원이나 발표 환경에서는 `.env`, MySQL, 공공데이터포털 인증키 없이도 화면을 확인할 수 있습니다.
+이 버전은 `.env`, MySQL, 공공데이터포털 인증키 없이 실행됩니다.  
+대신 로컬에서 수집하고 예측한 최신 결과를 CSV 스냅샷으로 저장해 `data` 폴더에 넣어 둔 구조입니다.
+
+즉, 화면은 실제 대시보드와 비슷하게 재현하지만, 공유용 버전 자체가 30분마다 API를 새로 호출하지는 않습니다.
 
 ## 2. 실행 방법
 
@@ -23,50 +25,43 @@ streamlit run app.py
 http://localhost:8501
 ```
 
-## 3. 포함된 데이터
-
-`data` 폴더에는 다음 CSV가 들어 있습니다.
+## 3. 포함된 주요 파일
 
 | 파일 | 내용 |
 |---|---|
-| `latest_summary.csv` | 20개 댐 최신 수문값과 3시간 뒤 예측 결과 |
-| `observation_history_72h.csv` | 최근 72시간 수문 운영 이력 |
-| `weather_forecast_latest.csv` | 최신 기상청 초단기/단기 예보 스냅샷 |
-| `prediction_validation.csv` | 3시간 뒤 예측값과 실제값 검증 결과 |
-| `downstream_representative.csv` | 대표 하류 수위관측소 및 최신 수위/유량 |
-| `downstream_candidates.csv` | 하류 수위관측소 후보 |
-| `five_day_range.csv` | 1~5일 장기 누적 방류 범위 예측 결과 |
-| `twostage_detail.csv` | Two-Stage 방류 변화량 실험 상세 지표 |
-| `twostage_grade.csv` | 댐별 예측 활용 등급 |
+| `app.py` | 공유용 Streamlit 대시보드 코드 |
+| `requirements.txt` | 실행에 필요한 Python 패키지 |
+| `data/latest_summary.csv` | 20개 댐 최신 수문값과 3시간 뒤 예측 결과 |
+| `data/observation_history_72h.csv` | 최근 72시간 수문 운영 이력 |
+| `data/weather_forecast_latest.csv` | 댐별 기상청 초단기/단기 예보 스냅샷 |
+| `data/prediction_validation.csv` | 3시간 뒤 예측값과 실제값 검증 결과 |
+| `data/downstream_representative.csv` | 대표 하류 수위관측소와 최근 수위/유량 |
+| `data/downstream_candidates.csv` | 하류 수위관측소 후보 목록 |
+| `data/five_day_range.csv` | 1일/3일/5일 누적 방류 구간 예측 |
+| `data/release_horizon_summary.csv` | 3시간/6시간/1~5일 전체 실험 지표 |
+| `data/release_horizon_by_dam.csv` | 댐별 3시간/6시간/1~5일 최고 모델 성능 |
 
-## 4. 공유할 때 주의사항
+## 4. 실시간 API와의 차이
 
-- `.env` 파일은 공유하지 않습니다.
-- 공공데이터포털 인증키는 GitHub에 올리지 않습니다.
-- MySQL 비밀번호도 공유하지 않습니다.
-- 이 공유용 버전은 실시간 자동수집이 아니라 CSV 스냅샷 기준입니다.
-- 실시간 자동수집/예측은 로컬 실험버전에서만 실행됩니다.
+실시간 API 수집과 MySQL 저장은 로컬 실험용 프로젝트에서 수행합니다.
 
-## 5. GitHub에 올리는 방법
+공유용 버전은 발표와 팀원 확인을 위해 CSV 파일만 읽습니다. 그래서 API 키를 GitHub에 올릴 필요가 없고, 팀원 컴퓨터에 MySQL이 없어도 대시보드를 볼 수 있습니다.
 
-프로젝트 전체가 아니라 이 폴더만 따로 올리는 것이 안전합니다.
+실시간 API까지 공유 버전에 붙이려면 다음 조건이 추가로 필요합니다.
 
-1. GitHub에서 새 저장소 생성
-2. 이 `공유용_Streamlit_대시보드` 폴더 내용을 업로드
-3. `app.py`, `requirements.txt`, `README_공유방법.md`, `data` 폴더가 포함되어 있는지 확인
-4. `.env`가 없는지 확인
+- Streamlit Cloud의 `Secrets`에 공공데이터포털 인증키 저장
+- 로컬 MySQL 대신 외부에서 접속 가능한 DB 사용
+- API 호출 제한과 인증키 노출 방지 처리
 
-## 6. Streamlit Community Cloud 배포 방법
+현재 프로젝트 제출용으로는 CSV 공유 버전이 더 안전합니다.
 
-1. GitHub에 공유용 폴더 내용을 올립니다.
-2. [Streamlit Community Cloud](https://streamlit.io/cloud)에 로그인합니다.
-3. `New app`을 누릅니다.
-4. GitHub 저장소를 선택합니다.
-5. Main file path를 `app.py`로 설정합니다.
-6. Deploy를 누릅니다.
+## 5. GitHub 업로드 주의사항
 
-배포 후 생성되는 URL을 팀원이나 교수님에게 공유하면 됩니다.
+- `.env` 파일은 절대 올리지 않습니다.
+- MySQL 비밀번호와 공공데이터포털 인증키는 올리지 않습니다.
+- 100MB가 넘는 학습용 CSV나 원본 대용량 CSV는 올리지 않습니다.
+- 공유용 폴더의 `data` 파일들은 모두 작은 스냅샷이므로 GitHub 업로드가 가능합니다.
 
-## 7. 발표 시 설명 문장
+## 6. 발표에서 설명할 문장
 
-> 공유용 대시보드는 실시간 API 키와 DB 연결 없이 실행할 수 있도록, 로컬에서 수집한 최신 수문 운영 정보, 기상예보, 하류 수위, 예측 결과를 CSV 스냅샷으로 저장한 버전입니다. 실제 운영 버전은 30분마다 API를 수집하고 DB에 저장하지만, 공유용 버전은 동일한 화면을 재현하기 위한 시연용입니다.
+> 공유용 대시보드는 실시간 API와 DB 없이도 동일한 화면을 재현할 수 있도록, 로컬에서 수집한 최신 수문 운영 정보, 기상예보, 하류 수위, 예측 결과를 CSV 스냅샷으로 저장한 버전입니다. 실제 운영 버전은 30분마다 API를 호출해 DB에 저장하고 예측을 갱신하지만, 공유와 발표 환경에서는 인증키 노출을 막기 위해 CSV 기반으로 시연합니다.
