@@ -15,6 +15,7 @@ SNAPSHOT_PATH = API_DATA_DIR / "02_실시간입력" / "실시간 예측 입력" 
 PREDICTION_PATH = API_DATA_DIR / "03_실시간예측" / "실시간 예측 결과" / "ML_방류량_변화예측_최신.csv"
 VALIDATION_PATH = API_DATA_DIR / "05_검증" / "실시간예측_실제값검증결과.csv"
 MASTER_PATH = DATA_DIR / "dam_master.csv"
+EXPERIMENT_DASHBOARD_DATA_DIR = EXPERIMENT_DIR / "대시보드" / "data"
 API_SCRIPT_DIR = API_DATA_DIR / "01_API수집"
 sys.path.insert(0, str(API_SCRIPT_DIR))
 
@@ -224,7 +225,36 @@ def build_interest_history() -> None:
         index=False,
         encoding="utf-8-sig",
     )
+    EXPERIMENT_DASHBOARD_DATA_DIR.mkdir(exist_ok=True)
+    daily.to_csv(
+        EXPERIMENT_DASHBOARD_DATA_DIR / "interest_period_history.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+    thresholds = []
+    for dam_code, dam in raw.groupby("dam_code"):
+        dam = dam.sort_values("obsrdt").copy()
+        inflow = dam["inflowqy"].dropna()
+        discharge_increase_3h = (dam["totdcwtrqy"] - dam["totdcwtrqy"].shift(3)).clip(lower=0).dropna()
+        thresholds.append(
+            {
+                "dam_code": int(dam_code),
+                "dam_name": name_map.get(int(dam_code), ""),
+                "inflow_q90": inflow.quantile(0.90),
+                "inflow_q95": inflow.quantile(0.95),
+                "discharge_increase_3h_q95": max(1.0, discharge_increase_3h.quantile(0.95)),
+            }
+        )
+    threshold_df = pd.DataFrame(thresholds)
+    threshold_df.to_csv(DATA_DIR / "risk_thresholds.csv", index=False, encoding="utf-8-sig")
+    threshold_df.to_csv(
+        EXPERIMENT_DASHBOARD_DATA_DIR / "risk_thresholds.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
     print(f"강수·고유입 관심구간 일별 요약 생성: {len(daily):,}건")
+    print(f"내부 운영 참고 신호 댐별 기준 생성: {len(threshold_df):,}건")
 
 
 def main() -> None:

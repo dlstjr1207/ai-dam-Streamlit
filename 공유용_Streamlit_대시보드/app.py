@@ -160,6 +160,72 @@ def rain_until(weather: pd.DataFrame, hours: int) -> float | None:
     return float(data.loc[data["forecast_datetime"].between(base, end), "rain"].sum())
 
 
+def internal_signal(
+    row: pd.Series,
+    selected_weather: pd.DataFrame,
+    threshold_row: pd.Series | None,
+) -> tuple[str, str, str, list[int]]:
+    if pd.isna(row.get("predicted_inflow_3h")) or pd.isna(row.get("predicted_discharge_3h")):
+        return "판단 보류", "예측에 필요한 최신 값이 충분하지 않습니다. 데이터 수집 상태를 확인한 뒤 다시 판단하세요.", "#64748b", [100, 116, 139, 180]
+    current_inflow = to_num(row.get("inflowqy"), 0) or 0
+    predicted_inflow = to_num(row.get("predicted_inflow_3h"), current_inflow) or current_inflow
+    current_discharge = to_num(row.get("totdcwtrqy"), 0) or 0
+    predicted_discharge = to_num(row.get("predicted_discharge_3h"), current_discharge) or current_discharge
+    storage_rate = to_num(row.get("rsvwtrt"), 0) or 0
+    observed_rain = to_num(row.get("rf"), 0) or 0
+    rain_3h = rain_until(selected_weather, 3) or 0
+    rain_12h = rain_until(selected_weather, 12) or 0
+    inflow_reference = max(current_inflow, predicted_inflow)
+    discharge_increase = max(0, predicted_discharge - current_discharge)
+
+    inflow_q90 = to_num(threshold_row.get("inflow_q90") if threshold_row is not None else None)
+    inflow_q95 = to_num(threshold_row.get("inflow_q95") if threshold_row is not None else None)
+    discharge_q95 = to_num(threshold_row.get("discharge_increase_3h_q95") if threshold_row is not None else None)
+    rain_caution = rain_3h >= 60 or rain_12h >= 110
+    rain_emergency = rain_3h >= 90 or rain_12h >= 180
+    inflow_watch = inflow_q90 is not None and inflow_reference >= inflow_q90
+    inflow_high = inflow_q95 is not None and inflow_reference >= inflow_q95
+    discharge_surge = discharge_q95 is not None and discharge_increase >= discharge_q95
+    storage_watch = storage_rate >= 75
+
+    reasons = []
+    if rain_emergency:
+        reasons.append("호우경보 수준의 예상 강수")
+    elif rain_caution:
+        reasons.append("호우주의보 수준의 예상 강수")
+    elif observed_rain > 0 or rain_3h > 0:
+        reasons.append("강수 관측 또는 예보")
+    if inflow_high:
+        reasons.append("유입량 과거 상위 5%")
+    elif inflow_watch:
+        reasons.append("유입량 과거 상위 10%")
+    if discharge_surge:
+        reasons.append("예상 방류 증가폭 과거 상위 5%")
+    if storage_watch:
+        reasons.append("저수율 75% 이상")
+
+    if rain_emergency or (discharge_surge and inflow_watch) or (rain_caution and inflow_watch and storage_watch):
+        return "긴급 검토", "비, 유입량, 예상 방류 증가가 함께 커졌습니다. 담당자가 즉시 강수량, 수문값과 하류 수위를 확인하세요.", "#dc2626", [220, 38, 38, 210]
+    if discharge_surge or rain_caution or inflow_high:
+        return "주의", "평소보다 유입량 또는 예상 방류 증가 폭이 큽니다. 강수량과 하류 수위를 함께 확인하세요.", "#d97706", [217, 119, 6, 195]
+    if observed_rain > 0 or rain_3h > 0 or inflow_watch:
+        return "관심", "비가 내리거나 유입량이 평소보다 늘고 있습니다. 다음 관측값에서 변화가 이어지는지 확인하세요.", "#ca8a04", [202, 138, 4, 185]
+    return "정상", "현재 확인이 필요한 뚜렷한 변화가 없습니다. 정기적으로 최신 관측값을 확인하세요.", "#16a34a", [22, 163, 74, 175]
+
+
+def render_signal_banner(level: str, reason: str, color: str) -> None:
+    st.markdown(
+        f"""
+        <div class="signal-banner" style="border-color:{color}; background:{color}12;">
+            <div class="signal-title" style="color:{color};">내부 운영 참고 신호: {level}</div>
+            <div class="signal-reason">{reason}</div>
+            <div class="signal-caption">공식 기상특보 또는 방류 명령이 아닙니다. 관리자가 수문값, 기상예보, 하류 상황을 함께 확인하기 위한 내부 참고 지표입니다.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def horizon_score(row: pd.Series) -> int:
     hit = to_num(row.get("변화신호_적중률"), 0) or 0
     improve = to_num(row.get("MAE_개선율(%)"), 0) or 0
@@ -270,6 +336,7 @@ five_day = read_csv("five_day_range.csv")
 horizon_summary = read_csv("release_horizon_summary.csv")
 horizon_by_dam = read_csv("release_horizon_by_dam.csv")
 interest_history = read_csv("interest_period_history.csv", parse_dates=["obsrdt"])
+risk_thresholds = read_csv("risk_thresholds.csv")
 
 validation = add_validation_metrics(validation, history)
 
@@ -339,6 +406,15 @@ st.markdown(
         border-radius:50%;
         display:inline-block;
     }
+    .signal-banner {
+        border:2px solid #16a34a;
+        border-radius:8px;
+        padding:14px 16px;
+        margin:10px 0 16px;
+    }
+    .signal-title { font-size:1.08rem; font-weight:850; }
+    .signal-reason { color:#334155; font-size:.92rem; font-weight:700; margin-top:5px; }
+    .signal-caption { color:#64748b; font-size:.8rem; margin-top:6px; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -362,10 +438,14 @@ selected_validation = validation[validation["dam_code"] == selected_code].copy()
 selected_downstream = downstream[downstream["dam_code"] == selected_code].copy()
 selected_candidates = downstream_candidates[downstream_candidates["dam_code"] == selected_code].head(3).copy()
 selected_interest = interest_history[interest_history["dam_code"] == selected_code].copy()
+selected_threshold = risk_thresholds[risk_thresholds["dam_code"] == selected_code]
+selected_threshold_row = selected_threshold.iloc[0] if not selected_threshold.empty else None
 status_label, status_reason, status_color, status_rgba = status_info(selected)
+signal_level, signal_reason, signal_color, signal_rgba = internal_signal(selected, selected_weather, selected_threshold_row)
 
 st.title("AI 댐 관리 대시보드")
 st.caption("수문 운영 정보, 기상예보, 하류 수위, 3시간/6시간/1~5일 방류 판단을 CSV 스냅샷으로 재현한 공유용 대시보드")
+render_signal_banner(signal_level, signal_reason, signal_color)
 
 top = st.columns(4)
 with top[0]:
@@ -462,6 +542,20 @@ with tab_interest:
         st.info("선택 댐의 강수·고유입 관심구간 데이터가 없습니다.")
     else:
         selected_interest = selected_interest.sort_values("obsrdt", ascending=False)
+        min_date = selected_interest["obsrdt"].min().date()
+        max_date = selected_interest["obsrdt"].max().date()
+        date_range = st.date_input(
+            "조회 기간",
+            value=(min_date, max_date),
+            min_value=min_date,
+            max_value=max_date,
+            help="선택한 기간에 포함되는 과거 관심구간만 표시합니다.",
+        )
+        if isinstance(date_range, tuple) and len(date_range) == 2:
+            start_date, end_date = date_range
+            selected_interest = selected_interest[
+                selected_interest["obsrdt"].dt.date.between(start_date, end_date)
+            ]
         cols = st.columns(4)
         with cols[0]:
             card("관심구간 기록", f"{len(selected_interest):,}건", "선택 댐 기준", "#2563eb")
@@ -592,17 +686,24 @@ with tab_downstream:
             st.dataframe(selected_candidates.fillna("-"), width="stretch", hide_index=True)
 
 with tab_map:
-    section(f"{selected_name}댐 위치", "선택한 댐을 중심으로 확대했습니다. 색상은 3시간 뒤 방류 조치 단계를 나타냅니다.")
-    map_df = summary[summary["dam_name"] == selected_name].copy()
-    info = map_df.apply(status_info, axis=1, result_type="expand")
-    map_df["status_label"] = info[0]
-    map_df["color"] = info[3]
+    section("20개 댐 위치", "전체 댐을 표시하고 선택한 댐은 큰 외곽 원으로 강조했습니다. 색상은 내부 운영 참고 신호입니다.")
+    map_df = summary.copy()
+    signal_rows = []
+    for _, map_row in map_df.iterrows():
+        map_weather = weather[weather["dam_code"] == int(map_row["dam_code"])].copy()
+        threshold = risk_thresholds[risk_thresholds["dam_code"] == int(map_row["dam_code"])]
+        threshold_row = threshold.iloc[0] if not threshold.empty else None
+        signal_rows.append(internal_signal(map_row, map_weather, threshold_row))
+    map_df["status_label"] = [item[0] for item in signal_rows]
+    map_df["status_reason"] = [item[1] for item in signal_rows]
+    map_df["color"] = [item[3] for item in signal_rows]
+    selected_map_df = map_df[map_df["dam_name"] == selected_name].copy()
     st.pydeck_chart(
         pdk.Deck(
             initial_view_state=pdk.ViewState(
-                latitude=float(selected["latitude"]),
-                longitude=float(selected["longitude"]),
-                zoom=10.5,
+                latitude=36.15,
+                longitude=127.9,
+                zoom=6.2,
                 pitch=0,
             ),
             layers=[
@@ -610,23 +711,41 @@ with tab_map:
                     "ScatterplotLayer",
                     data=map_df,
                     get_position="[longitude, latitude]",
-                    get_radius=2800,
+                    get_radius=9000,
                     get_fill_color="color",
                     pickable=True,
-                )
+                ),
+                pdk.Layer(
+                    "ScatterplotLayer",
+                    data=selected_map_df,
+                    get_position="[longitude, latitude]",
+                    get_radius=17500,
+                    get_fill_color=[37, 99, 235, 55],
+                    get_line_color=[29, 78, 216, 255],
+                    line_width_min_pixels=4,
+                    stroked=True,
+                    filled=True,
+                    pickable=False,
+                ),
             ],
             tooltip={
-                "text": "{dam_name}댐\n3시간 뒤 조치: {status_label}\n현재 방류량: {totdcwtrqy}\n예상 방류량: {predicted_discharge_3h}"
+                "text": "{dam_name}댐\n내부 참고 신호: {status_label}\n근거: {status_reason}\n현재 방류량: {totdcwtrqy}\n예상 방류량: {predicted_discharge_3h}"
             },
         )
     )
     st.markdown(
         """
         <div class="legend">
-            <span class="legend-item"><span class="legend-dot" style="background:#16a34a;"></span>초록: 현재 방류 유지</span>
-            <span class="legend-item"><span class="legend-dot" style="background:#d97706;"></span>주황: 주의 관찰</span>
-            <span class="legend-item"><span class="legend-dot" style="background:#dc2626;"></span>빨강: 방류 조정 검토</span>
-            <span class="legend-item"><span class="legend-dot" style="background:#64748b;"></span>회색: 예측 보류</span>
+            <span class="legend-item"><span class="legend-dot" style="background:#16a34a;"></span>초록: 정상</span>
+            <span class="legend-item"><span class="legend-dot" style="background:#ca8a04;"></span>노랑: 관심</span>
+            <span class="legend-item"><span class="legend-dot" style="background:#d97706;"></span>주황: 주의</span>
+            <span class="legend-item"><span class="legend-dot" style="background:#dc2626;"></span>빨강: 긴급 검토</span>
+            <span class="legend-item"><span class="legend-dot" style="background:#64748b;"></span>회색: 판단 보류</span>
+            <span class="legend-item"><span class="legend-dot" style="background:#2563eb;"></span>파란 외곽 원: 선택한 댐</span>
+        </div>
+        <div class="notice">
+            정상은 뚜렷한 변화가 없는 상태, 관심은 다음 관측값을 확인할 상태, 주의는 강수량과 하류 수위를 함께 확인할 상태입니다.
+            긴급 검토는 담당자가 즉시 확인할 상태이며, 판단 보류는 최신 예측값이 부족해 수집 상태부터 확인할 상태입니다.
         </div>
         """,
         unsafe_allow_html=True,
