@@ -269,6 +269,7 @@ downstream_candidates = read_csv("downstream_candidates.csv")
 five_day = read_csv("five_day_range.csv")
 horizon_summary = read_csv("release_horizon_summary.csv")
 horizon_by_dam = read_csv("release_horizon_by_dam.csv")
+interest_history = read_csv("interest_period_history.csv", parse_dates=["obsrdt"])
 
 validation = add_validation_metrics(validation, history)
 
@@ -280,6 +281,29 @@ st.markdown(
     """
     <style>
     .main { background:#f4f7fb; }
+    h1 {
+        color:#0f2747;
+        font-size:2rem !important;
+        font-weight:850 !important;
+        letter-spacing:0 !important;
+    }
+    h2, h3 {
+        color:#16365f;
+        font-weight:800 !important;
+        letter-spacing:0 !important;
+    }
+    h3 { font-size:1.24rem !important; }
+    p, li, label, div[data-testid="stCaptionContainer"] {
+        color:#52647a;
+    }
+    button[data-baseweb="tab"] p {
+        color:#52647a;
+        font-size:.92rem;
+        font-weight:750;
+    }
+    button[data-baseweb="tab"][aria-selected="true"] p {
+        color:#1d4ed8;
+    }
     .metric-card {
         background:#fff;
         border:1px solid #d8e0ea;
@@ -290,7 +314,7 @@ st.markdown(
         box-shadow:0 1px 2px rgba(15,23,42,.04);
     }
     .metric-title { color:#52647a; font-size:.88rem; font-weight:700; margin-bottom:8px; }
-    .metric-value { color:#071225; font-size:1.48rem; font-weight:850; line-height:1.25; word-break:keep-all; }
+    .metric-value { color:#0f2747; font-size:1.44rem; font-weight:850; line-height:1.25; word-break:keep-all; }
     .metric-caption { color:#66758a; font-size:.82rem; margin-top:6px; }
     .notice {
         border:1px solid #bfdbfe;
@@ -299,6 +323,21 @@ st.markdown(
         border-radius:8px;
         padding:12px 14px;
         margin:10px 0 14px 0;
+    }
+    .legend {
+        display:flex;
+        flex-wrap:wrap;
+        gap:8px 14px;
+        color:#52647a;
+        font-size:.84rem;
+        margin:8px 0 14px 0;
+    }
+    .legend-item { display:flex; align-items:center; gap:6px; }
+    .legend-dot {
+        width:10px;
+        height:10px;
+        border-radius:50%;
+        display:inline-block;
     }
     </style>
     """,
@@ -322,6 +361,7 @@ selected_weather = weather[weather["dam_code"] == selected_code].copy()
 selected_validation = validation[validation["dam_code"] == selected_code].copy()
 selected_downstream = downstream[downstream["dam_code"] == selected_code].copy()
 selected_candidates = downstream_candidates[downstream_candidates["dam_code"] == selected_code].head(3).copy()
+selected_interest = interest_history[interest_history["dam_code"] == selected_code].copy()
 status_label, status_reason, status_color, status_rgba = status_info(selected)
 
 st.title("AI 댐 관리 대시보드")
@@ -352,8 +392,8 @@ with detail[4]:
 with detail[5]:
     card("3시간 뒤 방류량", fmt_num(selected.get("predicted_discharge_3h"), " ㎥/s"), "운영 참고값", "#d97706")
 
-tab_summary, tab_weather, tab_operation, tab_prediction, tab_validation, tab_downstream, tab_map, tab_five = st.tabs(
-    ["요약", "기상예보", "수문 운영 정보", "3시간 뒤 방류 판단", "실시간 검증", "하류 수위", "지도", "5일 예측 해석"]
+tab_summary, tab_weather, tab_operation, tab_interest, tab_prediction, tab_validation, tab_downstream, tab_map, tab_five = st.tabs(
+    ["요약", "기상예보", "수문 운영 정보", "강수·고유입 관심구간", "3시간 뒤 방류 판단", "실시간 검증", "하류 수위", "지도", "5일 예측 해석"]
 )
 
 with tab_summary:
@@ -384,8 +424,8 @@ with tab_weather:
     daily = daily_weather_summary(selected_weather)
     if not daily.empty:
         st.bar_chart(daily.set_index("날짜")[["예상강수량_mm"]], height=240)
-        st.dataframe(daily, use_container_width=True, hide_index=True)
-    st.dataframe(selected_weather, use_container_width=True, hide_index=True, height=360)
+        st.dataframe(daily, width="stretch", hide_index=True)
+    st.dataframe(selected_weather, width="stretch", hide_index=True, height=360)
 
 with tab_operation:
     section("현재 수문 운영 정보", "가장 최근 수문 관측값")
@@ -404,7 +444,61 @@ with tab_operation:
             "totdcwtrqy": "방류량(totdcwtrqy)",
         }
     )
-    st.dataframe(operation, use_container_width=True, hide_index=True)
+    st.dataframe(operation, width="stretch", hide_index=True)
+
+with tab_interest:
+    section("강수·고유입 관심구간", "과거 학습 데이터 중 운영상 우선 확인이 필요한 시점만 모았습니다.")
+    st.markdown(
+        """
+        <div class="notice">
+        이 화면은 공식 호우특보 발령 이력이 아닙니다.
+        관측 강수량이 있거나, 최근 24시간 누적 강수량이 있거나,
+        선택 댐의 유입량이 과거 상위 25% 이상인 시점을 데이터 기반 관심구간으로 분류했습니다.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if selected_interest.empty:
+        st.info("선택 댐의 강수·고유입 관심구간 데이터가 없습니다.")
+    else:
+        selected_interest = selected_interest.sort_values("obsrdt", ascending=False)
+        cols = st.columns(4)
+        with cols[0]:
+            card("관심구간 기록", f"{len(selected_interest):,}건", "선택 댐 기준", "#2563eb")
+        with cols[1]:
+            card("최대 시간강수", fmt_num(selected_interest["rain"].max(), " mm"), "관측 rf/rain 기준", "#0284c7")
+        with cols[2]:
+            card("최대 유입량", fmt_num(selected_interest["inflowqy"].max(), " ㎥/s"), "관심구간 관측값", "#d97706")
+        with cols[3]:
+            card("최대 방류량", fmt_num(selected_interest["totdcwtrqy"].max(), " ㎥/s"), "관심구간 관측값", "#dc2626")
+
+        chart = (
+            selected_interest.sort_values("obsrdt")
+            .set_index("obsrdt")[["inflowqy", "totdcwtrqy", "rain_sum_24h"]]
+            .rename(
+                columns={
+                    "inflowqy": "유입량",
+                    "totdcwtrqy": "방류량",
+                    "rain_sum_24h": "24시간 누적강수",
+                }
+            )
+        )
+        st.line_chart(chart, height=280)
+        interest_view = selected_interest[
+            ["obsrdt", "rain", "rain_sum_24h", "inflowqy", "totdcwtrqy", "lowlevel", "rsvwtrt", "interest_reason"]
+        ].rename(
+            columns={
+                "obsrdt": "관측시각",
+                "rain": "시간강수(mm)",
+                "rain_sum_24h": "24시간 누적강수(mm)",
+                "inflowqy": "유입량(㎥/s)",
+                "totdcwtrqy": "방류량(㎥/s)",
+                "lowlevel": "수위(m)",
+                "rsvwtrt": "저수율(%)",
+                "interest_reason": "선정 근거",
+            }
+        )
+        st.dataframe(interest_view, width="stretch", hide_index=True, height=380)
 
 with tab_prediction:
     section("3시간 뒤 방류 판단", "방류량 직접 명령이 아니라 방류 변화 가능성 판단입니다.")
@@ -434,7 +528,7 @@ with tab_prediction:
                 "release_review": "관리자 안내",
             }
         ),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         height=420,
     )
@@ -476,7 +570,7 @@ with tab_validation:
                 "discharge_change_level": "변화 가능성",
             }
         )
-        st.dataframe(show, use_container_width=True, hide_index=True, height=360)
+        st.dataframe(show, width="stretch", hide_index=True, height=360)
 
 with tab_downstream:
     section("대표 하류 수위관측소", "방류 판단 보조를 위한 하류 또는 인접 수위관측소")
@@ -495,23 +589,28 @@ with tab_downstream:
             card("최근 하류 유량", fmt_num(ds.get("flow_rate"), " ㎥/s"), "시자료 API 스냅샷")
         st.markdown(f'<div class="notice">선정 기준: {ds.get("selection_reason", "-")}</div>', unsafe_allow_html=True)
         with st.expander("후보 관측소 보기", expanded=False):
-            st.dataframe(selected_candidates.fillna("-"), use_container_width=True, hide_index=True)
+            st.dataframe(selected_candidates.fillna("-"), width="stretch", hide_index=True)
 
 with tab_map:
-    section("20개 댐 위치", "색상은 3시간 뒤 방류 조치 단계를 나타냅니다.")
-    map_df = summary.copy()
+    section(f"{selected_name}댐 위치", "선택한 댐을 중심으로 확대했습니다. 색상은 3시간 뒤 방류 조치 단계를 나타냅니다.")
+    map_df = summary[summary["dam_name"] == selected_name].copy()
     info = map_df.apply(status_info, axis=1, result_type="expand")
     map_df["status_label"] = info[0]
     map_df["color"] = info[3]
     st.pydeck_chart(
         pdk.Deck(
-            initial_view_state=pdk.ViewState(latitude=36.15, longitude=127.9, zoom=6.2, pitch=0),
+            initial_view_state=pdk.ViewState(
+                latitude=float(selected["latitude"]),
+                longitude=float(selected["longitude"]),
+                zoom=10.5,
+                pitch=0,
+            ),
             layers=[
                 pdk.Layer(
                     "ScatterplotLayer",
                     data=map_df,
                     get_position="[longitude, latitude]",
-                    get_radius=13000,
+                    get_radius=2800,
                     get_fill_color="color",
                     pickable=True,
                 )
@@ -521,7 +620,17 @@ with tab_map:
             },
         )
     )
-    st.caption("초록: 현재 방류 유지, 주황: 주의 관찰, 빨강: 방류 조정 검토, 회색: 예측 보류")
+    st.markdown(
+        """
+        <div class="legend">
+            <span class="legend-item"><span class="legend-dot" style="background:#16a34a;"></span>초록: 현재 방류 유지</span>
+            <span class="legend-item"><span class="legend-dot" style="background:#d97706;"></span>주황: 주의 관찰</span>
+            <span class="legend-item"><span class="legend-dot" style="background:#dc2626;"></span>빨강: 방류 조정 검토</span>
+            <span class="legend-item"><span class="legend-dot" style="background:#64748b;"></span>회색: 예측 보류</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 with tab_five:
     section("5일 예측 해석", "3시간/6시간은 단기 판단, 1~5일은 누적 강수와 누적 방류 범위를 보는 장기 참고값입니다.")
@@ -539,10 +648,10 @@ with tab_five:
         with cols[2]:
             row6 = horizon_table[horizon_table["예측 구간"] == "6시간 뒤"]
             card("6시간 참고", row6.iloc[0]["참고 강도"] if not row6.empty else "-", "댐별 실험 지표")
-        st.dataframe(horizon_table.fillna("-"), use_container_width=True, hide_index=True)
+        st.dataframe(horizon_table.fillna("-"), width="stretch", hide_index=True)
 
     if not horizon_summary.empty:
         with st.expander("전체 예측 구간별 실험 지표 보기", expanded=False):
-            st.dataframe(horizon_summary, use_container_width=True, hide_index=True)
+            st.dataframe(horizon_summary, width="stretch", hide_index=True)
 
 st.caption("공유용 버전은 DB/API를 직접 호출하지 않고 CSV 스냅샷만 사용합니다. 실시간 API 수집은 로컬 실험용 대시보드와 자동수집 스크립트에서 수행합니다.")
